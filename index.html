@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AI Robot Companion</title>
+  
+  <!-- TensorFlow.js and COCO-SSD for Real-time Local Object Detection Outlines -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+
+  <style>
+    :root {
+      --bg: #0f1015;
+      --card: #181920;
+      --accent: #00e5ff;
+      --text: #e1e1e6;
+      --border: #2a2b36;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    @media (min-width: 768px) {
+      body {
+        display: grid;
+        grid-template-columns: 360px 1fr;
+      }
+    }
+    sidebar {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 12px;
+      overflow-y: auto;
+      max-height: 50vh;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    @media (min-width: 768px) {
+      sidebar {
+        border-right: 1px solid var(--border);
+        border-bottom: none;
+        max-height: 100vh;
+      }
+    }
+    main {
+      flex: 1;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow: hidden;
+    }
+    .video-container {
+      position: relative;
+      width: 100%;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      aspect-ratio: 4 / 3;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    canvas#overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    #chat-log {
+      flex: 1;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .msg {
+      padding: 8px 12px;
+      border-radius: 8px;
+      max-width: 85%;
+      font-size: 0.9em;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .user { background: #2b384e; align-self: flex-end; }
+    .bot { background: #0e4e43; align-self: flex-start; }
+    .sys { background: #3c2a15; align-self: center; font-size: 0.8em; text-align: center; }
+    .controls {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+    }
+    input, select, button {
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #101116;
+      color: #fff;
+      font-size: 0.85em;
+      width: 100%;
+    }
+    button {
+      background: var(--accent);
+      color: #000;
+      font-weight: bold;
+      cursor: pointer;
+      border: none;
+    }
+    button.danger {
+      background: #ff5252;
+      color: #fff;
+    }
+    .status-bar {
+      font-size: 0.75em;
+      color: #a0a0b0;
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+    }
+  </style>
+</head>
+<body>
+
+  <sidebar>
+    <div class="video-container">
+      <video id="webcam" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <canvas id="snapshot" style="display:none;"></canvas>
+    </div>
+
+    <div class="status-bar">
+      <span id="mic-status">Mic: Off</span>
+      <span id="vision-status">Vision: Loading Detector...</span>
+    </div>
+
+    <div class="controls">
+      <button id="start-btn">⚡ Activate AI</button>
+      
+      <label>Camera Source:</label>
+      <select id="camera-select"></select>
+
+      <label>AI Provider & Model:</label>
+      <select id="api-provider">
+        <option value="gemini-3.6-flash">Google Gemini (3.6 Flash)</option>
+        <option value="gemini-2.5-flash">Google Gemini (2.5 Flash)</option>
+        <option value="gemini-1.5-flash">Google Gemini (1.5 Flash)</option>
+        <option value="openai">OpenAI (GPT-4o mini)</option>
+      </select>
+
+      <input type="password" id="api-key" placeholder="Enter API Key...">
+
+      <label>Bot Personality (Profile):</label>
+      <select id="bot-profile" onchange="updateProfile()">
+        <option value="normal">Normal Companion</option>
+        <option value="detector">Item & Safety Inspector</option>
+        <option value="custom">Custom System Prompt</option>
+      </select>
+      <input type="text" id="custom-prompt" placeholder="Custom Instructions..." style="display:none;">
+
+      <label>Save Slot Manager:</label>
+      <div class="row">
+        <select id="save-slots"></select>
+        <button id="new-slot-btn" style="width: 40%;">New</button>
+      </div>
+      <button id="delete-slot-btn" class="danger">Delete Slot</button>
+
+      <label>TTS Audio Settings:</label>
+      <select id="tts-engine" onchange="toggleTtsFields()">
+        <option value="web">Browser Native TTS</option>
+        <option value="fish">Fish Audio API</option>
+      </select>
+
+      <div id="fish-tts-config" style="display:none; flex-direction:column; gap:6px;">
+        <input type="password" id="fish-key" placeholder="Fish Audio API Key">
+        <input type="text" id="fish-model-id" placeholder="Model ID / Reference ID (e.g. 7f4a...)">
+      </div>
+    </div>
+  </sidebar>
+
+  <main>
+    <h2>Robot Vision & Speech Log</h2>
+    <div id="chat-log"></div>
+  </main>
+
+  <script>
+    const video = document.getElementById('webcam');
+    const overlay = document.getElementById('overlay');
+    const overlayCtx = overlay.getContext('2d');
+    const canvas = document.getElementById('snapshot');
+    const cameraSelect = document.getElementById('camera-select');
+    const chatLog = document.getElementById('chat-log');
+    const startBtn = document.getElementById('start-btn');
+    const apiKeyInput = document.getElementById('api-key');
+    const apiProvider = document.getElementById('api-provider');
+    const botProfile = document.getElementById('bot-profile');
+    const customPromptInput = document.getElementById('custom-prompt');
+    const saveSlots = document.getElementById('save-slots');
+    const ttsEngine = document.getElementById('tts-engine');
+    const fishKey = document.getElementById('fish-key');
+    const fishModelId = document.getElementById('fish-model-id');
+
+    let currentStream = null;
+    let recognition = null;
+    let isListening = false;
+    let activeSlot = 'default_slot';
+    let chatHistory = {};
+    let objectDetectorModel = null;
+    let detectedObjectsList = [];
+
+    const PROFILES = {
+      normal: "You are a helpful, smart AI robot companion. You have perfect memory of everything the user shares with you in this session. Maintain full context awareness of past statements, facts, and conversation history while interacting naturally based on what you see in front of you.",
+      detector: "You are an AI Inspector Robot equipped with continuous computer vision object bounding. Identify items in front of the camera (clothing, accessories, tools, toys, props, weapons, electronics). Remembers all past context shared by the user."
+    };
+
+    async function init() {
+      loadAllSaves();
+      populateCameraList();
+      toggleTtsFields();
+      initSpeechRecognition();
+      loadDetectorModel();
+    }
+
+    async function loadDetectorModel() {
+      try {
+        objectDetectorModel = await cocoSsd.load();
+        document.getElementById('vision-status').innerText = 'Vision: Ready (Detection Active)';
+        startDetectionLoop();
+      } catch(e) {
+        console.error("Failed to load detector", e);
+        document.getElementById('vision-status').innerText = 'Vision: Detector Offline';
+      }
+    }
+
+    function startDetectionLoop() {
+      setInterval(async () => {
+        if (!objectDetectorModel || !video.videoWidth) return;
+        
+        overlay.width = video.videoWidth;
+        overlay.height = video.videoHeight;
+
+        const predictions = await objectDetectorModel.detect(video);
+        detectedObjectsList = predictions.map(p => `${p.class} (${Math.round(p.score * 100)}%)`);
+        
+        overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+        predictions.forEach(prediction => {
+          const [x, y, width, height] = prediction.bbox;
+          
+          overlayCtx.strokeStyle = "#00e5ff";
+          overlayCtx.lineWidth = 3;
+          overlayCtx.strokeRect(x, y, width, height);
+
+          overlayCtx.fillStyle = "rgba(0, 229, 255, 0.85)";
+          overlayCtx.font = "16px sans-serif";
+          const label = `${prediction.class} ${Math.round(prediction.score * 100)}%`;
+          const textWidth = overlayCtx.measureText(label).width;
+          
+          overlayCtx.fillRect(x, y > 24 ? y - 24 : y, textWidth + 10, 24);
+          overlayCtx.fillStyle = "#000000";
+          overlayCtx.fillText(label, x + 5, y > 24 ? y - 7 : y + 17);
+        });
+      }, 150);
+    }
+
+    function loadAllSaves() {
+      const raw = localStorage.getItem('ai_robot_saves');
+      chatHistory = raw ? JSON.parse(raw) : { 'default_slot': [] };
+      renderSlotDropdown();
+      renderChat();
+    }
+
+    function saveAllSaves() {
+      localStorage.setItem('ai_robot_saves', JSON.stringify(chatHistory));
+    }
+
+    function renderSlotDropdown() {
+      saveSlots.innerHTML = Object.keys(chatHistory).map(s => 
+        `<option value="${s}" ${s === activeSlot ? 'selected' : ''}>${s}</option>`
+      ).join('');
+    }
+
+    saveSlots.onchange = () => {
+      activeSlot = saveSlots.value;
+      renderChat();
+    };
+
+    document.getElementById('new-slot-btn').onclick = () => {
+      const name = prompt("Enter new Save Slot Name:") || `slot_${Date.now()}`;
+      if (!chatHistory[name]) chatHistory[name] = [];
+      activeSlot = name;
+      saveAllSaves();
+      renderSlotDropdown();
+      renderChat();
+    };
+
+    document.getElementById('delete-slot-btn').onclick = () => {
+      if (Object.keys(chatHistory).length <= 1) return alert("Must keep at least one save slot.");
+      delete chatHistory[activeSlot];
+      activeSlot = Object.keys(chatHistory)[0];
+      saveAllSaves();
+      renderSlotDropdown();
+      renderChat();
+    };
+
+    function logMessage(role, text) {
+      if (!chatHistory[activeSlot]) chatHistory[activeSlot] = [];
+      chatHistory[activeSlot].push({ role, text, time: new Date().toLocaleTimeString() });
+      saveAllSaves();
+      renderChat();
+    }
+
+    function renderChat() {
+      const msgs = chatHistory[activeSlot] || [];
+      chatLog.innerHTML = msgs.map(m => 
+        `<div class="msg ${m.role}"><b>${m.role.toUpperCase()}:</b> ${m.text}</div>`
+      ).join('');
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
+    async function populateCameraList() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(d => d.kind === 'videoinput');
+        
+        cameraSelect.innerHTML = videoDevices.map((d, i) => 
+          `<option value="${d.deviceId}">${d.label || `Camera ${i + 1}`}</option>`
+        ).join('');
+
+        if (videoDevices.length > 0) startCamera(videoDevices[0].deviceId);
+      } catch(e) {
+        startCamera(null);
+      }
+    }
+
+    cameraSelect.onchange = () => startCamera(cameraSelect.value);
+
+    async function startCamera(deviceId) {
+      if (currentStream) currentStream.getTracks().forEach(track => track.stop());
+      
+      try {
+        currentStream = await navigator.mediaDevices.getUserMedia({
+          video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "user" }
+        });
+        video.srcObject = currentStream;
+      } catch (err) {
+        console.warn("Camera fallback applied");
+      }
+    }
+
+    function initSpeechRecognition() {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) return;
+
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+
+      recognition.onstart = () => {
+        document.getElementById('mic-status').innerText = 'Mic: Active (Listening)';
+      };
+
+      recognition.onresult = async (event) => {
+        const text = event.results[event.results.length - 1][0].transcript.trim();
+        if (!text) return;
+
+        logMessage('user', text);
+        await processTurn(text);
+      };
+
+      recognition.onerror = (e) => {
+        console.warn("Speech recognition error", e);
+      };
+
+      recognition.onend = () => {
+        if (isListening) {
+          try { recognition.start(); } catch(e){}
+        } else {
+          document.getElementById('mic-status').innerText = 'Mic: Off';
+        }
+      };
+    }
+
+    function captureFrame() {
+      if (!video.videoWidth) return null;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+    }
+
+    function getSystemPrompt() {
+      return botProfile.value === 'custom' 
+        ? (customPromptInput.value || PROFILES.normal) 
+        : PROFILES[botProfile.value];
+    }
+
+    function updateProfile() {
+      customPromptInput.style.display = botProfile.value === 'custom' ? 'block' : 'none';
+    }
+
+    async function processTurn(userText) {
+      const apiKey = apiKeyInput.value.trim();
+      if (!apiKey) {
+        speak("Missing API Key.");
+        return;
+      }
+
+      document.getElementById('vision-status').innerText = 'Vision: Analyzing...';
+      const base64Img = captureFrame();
+      const sysPrompt = getSystemPrompt();
+      const selectedModel = apiProvider.value;
+      const detectedContext = detectedObjectsList.length ? `Objects outlined in frame: [${detectedObjectsList.join(', ')}]` : '';
+
+      const currentSlotHistory = chatHistory[activeSlot] || [];
+
+      try {
+        let replyText = "";
+        
+        if (selectedModel === 'openai') {
+          const apiMessages = [{ role: "system", content: sysPrompt }];
+
+          currentSlotHistory.forEach(item => {
+            if (item.role === 'user' || item.role === 'bot') {
+              apiMessages.push({
+                role: item.role === 'bot' ? 'assistant' : 'user',
+                content: item.text
+              });
+            }
+          });
+
+          const lastIndex = apiMessages.length - 1;
+          if (base64Img && lastIndex >= 0 && apiMessages[lastIndex].role === 'user') {
+            apiMessages[lastIndex].content = [
+              { type: "text", text: `${userText}\n\n${detectedContext}` },
+              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Img}` } }
+            ];
+          }
+
+          const res = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+              model: "gpt-4o-mini",
+              messages: apiMessages
+            })
+          });
+
+          const data = await res.json();
+          if (data.error) throw new Error(data.error.message);
+          replyText = data.choices[0].message.content;
+
+        } else {
+          const contents = [];
+
+          currentSlotHistory.forEach(item => {
+            if (item.role === 'user' || item.role === 'bot') {
+              contents.push({
+                role: item.role === 'bot' ? 'model' : 'user',
+                parts: [{ text: item.text }]
+              });
+            }
+          });
+
+          const activeUserParts = [{ text: `${sysPrompt}\n${detectedContext}\nUser says: "${userText}"` }];
+          if (base64Img) activeUserParts.push({ inline_data: { mime_type: "image/jpeg", data: base64Img } });
+
+          if (contents.length > 0 && contents[contents.length - 1].role === 'user') {
+            contents[contents.length - 1].parts = activeUserParts;
+          } else {
+            contents.push({ role: 'user', parts: activeUserParts });
+          }
+
+          const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${apiKey}`;
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents })
+          });
+          
+          const data = await res.json();
+          if (data.error) throw new Error(data.error.message);
+          replyText = data.candidates[0].content.parts[0].text;
+        }
+
+        logMessage('bot', replyText);
+        await speak(replyText);
+
+      } catch (err) {
+        console.error("API Error Detail:", err);
+        logMessage('sys', `API Error: ${err.message}`);
+      } finally {
+        document.getElementById('vision-status').innerText = 'Vision: Ready (Detection Active)';
+      }
+    }
+
+    function toggleTtsFields() {
+      document.getElementById('fish-tts-config').style.display = 
+        ttsEngine.value === 'fish' ? 'flex' : 'none';
+    }
+
+    async function speak(text) {
+      if (ttsEngine.value === 'fish') {
+        const key = fishKey.value.trim();
+        const modelId = fishModelId.value.trim();
+
+        if (!key || !modelId) {
+          console.warn("Missing Fish Audio Key or Model ID. Falling back to native TTS.");
+        } else {
+          try {
+            const res = await fetch("https://api.fish.audio/v1/tts", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${key}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                text: text,
+                reference_id: modelId,
+                format: "mp3"
+              })
+            });
+
+            if (!res.ok) throw new Error(`Fish Audio Error: ${res.statusText}`);
+
+            const blob = await res.blob();
+            const audioUrl = URL.createObjectURL(blob);
+            const audio = new Audio(audioUrl);
+
+            return new Promise((resolve) => {
+              audio.onended = resolve;
+              audio.onerror = resolve;
+              audio.play();
+            });
+          } catch(e) {
+            console.error("Fish Audio Failed:", e);
+          }
+        }
+      }
+
+      return new Promise((resolve) => {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.onend = resolve;
+        utterance.onerror = resolve;
+        window.speechSynthesis.speak(utterance);
+      });
+    }
+
+    startBtn.onclick = () => {
+      if (!isListening) {
+        isListening = true;
+        if (recognition) {
+          try { recognition.start(); } catch(e){}
+        }
+        startBtn.innerText = "🛑 Stop AI";
+        startBtn.style.background = "#ff5252";
+        startBtn.style.color = "#fff";
+      } else {
+        isListening = false;
+        if (recognition) {
+          try { recognition.stop(); } catch(e){}
+        }
+        startBtn.innerText = "⚡ Activate AI";
+        startBtn.style.background = "var(--accent)";
+        startBtn.style.color = "#000";
+        document.getElementById('mic-status').innerText = 'Mic: Off';
+      }
+    };
+
+    window.onload = init;
+  </script>
+</body>
+</html>
