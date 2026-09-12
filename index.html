@@ -250,7 +250,8 @@
       <select id="camera-select"></select>
 
       <label>AI Provider & Model:</label>
-      <select id="api-provider">
+      <select id="api-provider" onchange="toggleApiInput()">
+        <option value="ollama">Local Ollama (e.g. gemma3 / llava)</option>
         <option value="gemini-3.6-flash">Google Gemini (3.6 Flash)</option>
         <option value="gemini-2.5-flash">Google Gemini (2.5 Flash)</option>
         <option value="gemini-1.5-flash">Google Gemini (1.5 Flash)</option>
@@ -258,6 +259,7 @@
       </select>
 
       <input type="password" id="api-key" placeholder="Enter API Key...">
+      <input type="text" id="ollama-model-input" placeholder="Ollama Model Tag (e.g. gemma3:12b)" value="gemma3:12b" style="display:none;">
 
       <label>Bot Personality (Profile):</label>
       <select id="bot-profile" onchange="updateProfile()">
@@ -308,6 +310,7 @@
     const chatLog = document.getElementById('chat-log');
     const startBtn = document.getElementById('start-btn');
     const apiKeyInput = document.getElementById('api-key');
+    const ollamaModelInput = document.getElementById('ollama-model-input');
     const apiProvider = document.getElementById('api-provider');
     const botProfile = document.getElementById('bot-profile');
     const customPromptInput = document.getElementById('custom-prompt');
@@ -369,9 +372,20 @@
       loadAllSaves();
       populateCameraList();
       toggleTtsFields();
+      toggleApiInput();
       initSpeechRecognition();
       loadDetectorModels();
       setupKeybinds();
+    }
+
+    function toggleApiInput() {
+      if (apiProvider.value === 'ollama') {
+        apiKeyInput.style.display = 'none';
+        ollamaModelInput.style.display = 'block';
+      } else {
+        apiKeyInput.style.display = 'block';
+        ollamaModelInput.style.display = 'none';
+      }
     }
 
     function setupKeybinds() {
@@ -668,15 +682,16 @@
     }
 
     async function processTurn(userText) {
+      const selectedModel = apiProvider.value;
       const apiKey = apiKeyInput.value.trim();
-      if (!apiKey) {
+      
+      if (selectedModel !== 'ollama' && !apiKey) {
         speak("Missing API Key.");
         return;
       }
 
       const base64Img = captureFrame();
       const sysPrompt = getSystemPrompt();
-      const selectedModel = apiProvider.value;
 
       const visionContext = [];
       if (detectedObjectsList.length) visionContext.push(`Detected Objects: [${detectedObjectsList.join(', ')}]`);
@@ -687,8 +702,29 @@
 
       try {
         let rawResponse = "";
-        
-        if (selectedModel === 'openai') {
+
+        if (selectedModel === 'ollama') {
+          const modelTag = ollamaModelInput.value.trim() || 'gemma3:12b';
+          const payload = {
+            model: modelTag,
+            prompt: `${sysPrompt}\n\n${detectedContext}\n\nUser text: "${userText}"`,
+            stream: false,
+            format: "json"
+          };
+          
+          if (base64Img) payload.images = [base64Img];
+
+          const res = await fetch('http://localhost:11434/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          if (!res.ok) throw new Error(`Ollama Request Failed (${res.statusText}). Make sure Ollama is running.`);
+          const data = await res.json();
+          rawResponse = data.response;
+
+        } else if (selectedModel === 'openai') {
           const apiMessages = [{ role: "system", content: sysPrompt }];
 
           currentSlotHistory.forEach(item => {
