@@ -223,6 +223,7 @@
     let currentStream = null;
     let recognition = null;
     let isListening = false;
+    let isSpeaking = false;
     let activeSlot = 'default_slot';
     let chatHistory = {};
     let objectDetectorModel = null;
@@ -380,6 +381,8 @@
       };
 
       recognition.onresult = async (event) => {
+        if (isSpeaking) return; // Prevent input processing while speaking
+
         const text = event.results[event.results.length - 1][0].transcript.trim();
         if (!text) return;
 
@@ -392,12 +395,25 @@
       };
 
       recognition.onend = () => {
-        if (isListening) {
+        if (isListening && !isSpeaking) {
           try { recognition.start(); } catch(e){}
-        } else {
+        } else if (!isSpeaking) {
           document.getElementById('mic-status').innerText = 'Mic: Off';
         }
       };
+    }
+
+    function pauseListening() {
+      if (recognition && isListening) {
+        try { recognition.stop(); } catch(e){}
+      }
+      document.getElementById('mic-status').innerText = 'Mic: Muted (Bot Speaking)';
+    }
+
+    function resumeListening() {
+      if (recognition && isListening) {
+        try { recognition.start(); } catch(e){}
+      }
     }
 
     function captureFrame() {
@@ -523,13 +539,20 @@
     }
 
     async function speak(text) {
+      isSpeaking = true;
+      pauseListening();
+
+      const finishSpeaking = (resolveFunc) => {
+        isSpeaking = false;
+        resumeListening();
+        resolveFunc();
+      };
+
       if (ttsEngine.value === 'fish') {
         const key = fishKey.value.trim();
         const modelId = fishModelId.value.trim();
 
-        if (!key || !modelId) {
-          console.warn("Missing Fish Audio Key or Model ID. Falling back to native TTS.");
-        } else {
+        if (key && modelId) {
           try {
             const res = await fetch("https://api.fish.audio/v1/tts", {
               method: "POST",
@@ -551,8 +574,8 @@
             const audio = new Audio(audioUrl);
 
             return new Promise((resolve) => {
-              audio.onended = resolve;
-              audio.onerror = resolve;
+              audio.onended = () => finishSpeaking(resolve);
+              audio.onerror = () => finishSpeaking(resolve);
               audio.play();
             });
           } catch(e) {
@@ -564,8 +587,8 @@
       return new Promise((resolve) => {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
-        utterance.onend = resolve;
-        utterance.onerror = resolve;
+        utterance.onend = () => finishSpeaking(resolve);
+        utterance.onerror = () => finishSpeaking(resolve);
         window.speechSynthesis.speak(utterance);
       });
     }
@@ -573,7 +596,7 @@
     startBtn.onclick = () => {
       if (!isListening) {
         isListening = true;
-        if (recognition) {
+        if (recognition && !isSpeaking) {
           try { recognition.start(); } catch(e){}
         }
         startBtn.innerText = "🛑 Stop AI";
