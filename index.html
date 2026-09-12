@@ -3,11 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>AI Robot Companion</title>
+  <title>AI Companion Face & Gestures</title>
   
-  <!-- TensorFlow.js and COCO-SSD for Real-time Local Object Detection Outlines -->
+  <!-- TensorFlow.js and COCO-SSD for Object Outlines -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+  
+  <!-- MediaPipe Tasks Vision for Hand Gesture Detection -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm/vision_bundle.js" crossorigin="anonymous"></script>
 
   <style>
     :root {
@@ -34,6 +37,32 @@
         grid-template-columns: 360px 1fr;
       }
     }
+
+    /* FULLSCREEN OVERLAY UI WHEN ACTIVE */
+    body.ai-active sidebar,
+    body.ai-active main > h2 {
+      display: none !important;
+    }
+
+    body.ai-active {
+      display: block !important;
+      background: #ffffff !important;
+    }
+
+    body.ai-active main {
+      padding: 0 !important;
+      width: 100vw;
+      height: 100vh;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    body.ai-active .face-avatar {
+      display: flex !important;
+      background: #ffffff !important;
+    }
+
     sidebar {
       background: var(--card);
       border-bottom: 1px solid var(--border);
@@ -58,6 +87,7 @@
       flex-direction: column;
       gap: 10px;
       overflow: hidden;
+      position: relative;
     }
     .video-container {
       position: relative;
@@ -80,6 +110,23 @@
       height: 100%;
       pointer-events: none;
     }
+    .face-avatar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #ffffff;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 10;
+    }
+    .face-avatar img {
+      max-width: 70vmin;
+      max-height: 70vmin;
+      object-fit: contain;
+    }
     #chat-log {
       flex: 1;
       background: var(--card);
@@ -90,6 +137,16 @@
       display: flex;
       flex-direction: column;
       gap: 8px;
+    }
+    body.ai-active #chat-log {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      width: 320px;
+      height: 70vh;
+      z-index: 20;
+      background: rgba(24, 25, 32, 0.95);
+      display: none;
     }
     .msg {
       padding: 8px 12px;
@@ -135,8 +192,34 @@
       font-size: 0.75em;
       color: #a0a0b0;
       display: flex;
-      justify-content: space-between;
+      flex-direction: column;
+      gap: 4px;
       padding: 4px 0;
+    }
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+    }
+    .karma-badge {
+      color: #00e5ff;
+      font-weight: bold;
+    }
+    
+    /* Muted Text Overlay */
+    #muted-indicator {
+      display: none;
+      position: absolute;
+      top: 15px;
+      right: 15px;
+      color: #ff3b30;
+      font-size: 14px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      background: rgba(0, 0, 0, 0.05);
+      padding: 4px 8px;
+      border-radius: 4px;
+      z-index: 30;
+      user-select: none;
     }
   </style>
 </head>
@@ -150,12 +233,18 @@
     </div>
 
     <div class="status-bar">
-      <span id="mic-status">Mic: Off</span>
-      <span id="vision-status">Vision: Loading Detector...</span>
+      <div class="status-row">
+        <span id="mic-status">Mic: Off</span>
+        <span id="vision-status">Vision: Loading...</span>
+      </div>
+      <div class="status-row">
+        <span>Emotion: <span id="emotion-val" class="karma-badge">Neutral (0)</span></span>
+        <span>Karma: <span id="karma-val" class="karma-badge">0</span></span>
+      </div>
     </div>
 
     <div class="controls">
-      <button id="start-btn">⚡ Activate AI</button>
+      <button id="start-btn">⚡ Activate AI Companion</button>
       
       <label>Camera Source:</label>
       <select id="camera-select"></select>
@@ -172,8 +261,8 @@
 
       <label>Bot Personality (Profile):</label>
       <select id="bot-profile" onchange="updateProfile()">
-        <option value="normal">Normal Companion</option>
-        <option value="detector">Item & Safety Inspector</option>
+        <option value="normal">Interactive Companion</option>
+        <option value="detector">Safety Inspector</option>
         <option value="custom">Custom System Prompt</option>
       </select>
       <input type="text" id="custom-prompt" placeholder="Custom Instructions..." style="display:none;">
@@ -193,13 +282,20 @@
 
       <div id="fish-tts-config" style="display:none; flex-direction:column; gap:6px;">
         <input type="password" id="fish-key" placeholder="Fish Audio API Key">
-        <input type="text" id="fish-model-id" placeholder="Model ID / Reference ID (e.g. 7f4a...)">
+        <input type="text" id="fish-model-id" placeholder="Model ID / Reference ID">
       </div>
     </div>
   </sidebar>
 
   <main>
     <h2>Robot Vision & Speech Log</h2>
+    
+    <!-- AI Animated Display Face -->
+    <div class="face-avatar" id="face-avatar">
+      <img id="face-image" src="faces/1.png" alt="AI Face">
+    </div>
+
+    <div id="muted-indicator">MUTED</div>
     <div id="chat-log"></div>
   </main>
 
@@ -219,19 +315,54 @@
     const ttsEngine = document.getElementById('tts-engine');
     const fishKey = document.getElementById('fish-key');
     const fishModelId = document.getElementById('fish-model-id');
+    const faceAvatar = document.getElementById('face-avatar');
+    const faceImage = document.getElementById('face-image');
+    const mutedIndicator = document.getElementById('muted-indicator');
 
     let currentStream = null;
     let recognition = null;
     let isListening = false;
     let isSpeaking = false;
+    let isMuted = false;
     let activeSlot = 'default_slot';
     let chatHistory = {};
+    
     let objectDetectorModel = null;
+    let gestureRecognizer = null;
     let detectedObjectsList = [];
+    let detectedGesturesList = [];
+    let idleInterval = null;
+
+    let emotionScore = 0;
+    let karmaScore = 0;
+    let currentPose = 'neutral';
+    let mouthFlapInterval = null;
+
+    const FACE_MAP = {
+      neutral: { closed: "faces/1.png", open: "faces/2.png" },
+      bored:   { closed: "faces/3.png", open: "faces/4.png" },
+      angry:   { closed: "faces/5.png", open: "faces/6.png" },
+      happy:   { closed: "faces/7.png", open: "faces/8.png" }
+    };
 
     const PROFILES = {
-      normal: "You are a helpful, smart AI robot companion. You have perfect memory of everything the user shares with you in this session. Maintain full context awareness of past statements, facts, and conversation history while interacting naturally based on what you see in front of you.",
-      detector: "You are an AI Inspector Robot equipped with continuous computer vision object bounding. Identify items in front of the camera (clothing, accessories, tools, toys, props, weapons, electronics). Remembers all past context shared by the user."
+      normal: "You are an expressive AI robot with an animated white-background screen face. You observe your surroundings, human gestures, and object placement.\n\n" +
+              "OUTPUT FORMAT (Strict JSON Only):\n" +
+              "{\n" +
+              '  "speech": "Response speech text",\n' +
+              '  "pose": "neutral" | "bored" | "angry" | "happy",\n' +
+              '  "emotion_change": (-20 to +20),\n' +
+              '  "karma_change": (-20 to +20)\n' +
+              "}",
+
+      detector: "You are a Safety Inspector Bot monitoring objects and gestures.\n\n" +
+                "OUTPUT FORMAT (Strict JSON Only):\n" +
+                "{\n" +
+                '  "speech": "Inspection report",\n' +
+                '  "pose": "neutral" | "bored" | "angry" | "happy",\n' +
+                '  "emotion_change": 0,\n' +
+                '  "karma_change": 0\n' +
+                "}"
     };
 
     async function init() {
@@ -239,48 +370,142 @@
       populateCameraList();
       toggleTtsFields();
       initSpeechRecognition();
-      loadDetectorModel();
+      loadDetectorModels();
+      setupKeybinds();
     }
 
-    async function loadDetectorModel() {
+    function setupKeybinds() {
+      window.addEventListener('keydown', (e) => {
+        if (!document.body.classList.contains('ai-active')) return;
+
+        switch (e.key) {
+          case '1':
+            chatLog.style.display = (chatLog.style.display === 'flex' || chatLog.style.display === 'block') ? 'none' : 'flex';
+            break;
+
+          case '2':
+            deactivateAI();
+            break;
+
+          case '3':
+            toggleMute();
+            break;
+
+          case '4':
+            toggleFullscreen();
+            break;
+        }
+      });
+    }
+
+    function toggleMute() {
+      isMuted = !isMuted;
+      mutedIndicator.style.display = isMuted ? 'block' : 'none';
+      
+      if (isMuted) {
+        if (recognition) try { recognition.stop(); } catch(e){}
+        document.getElementById('mic-status').innerText = 'Mic: Muted';
+      } else {
+        if (isListening && !isSpeaking) try { recognition.start(); } catch(e){}
+        document.getElementById('mic-status').innerText = 'Mic: Active';
+      }
+    }
+
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => console.error(err));
+      } else {
+        if (document.exitFullscreen) document.exitFullscreen();
+      }
+    }
+
+    async function loadDetectorModels() {
       try {
         objectDetectorModel = await cocoSsd.load();
-        document.getElementById('vision-status').innerText = 'Vision: Ready (Detection Active)';
+        
+        const { GestureRecognizer, FilesetResolver } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm/vision_bundle.js');
+        const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm');
+        gestureRecognizer = await GestureRecognizer.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
+            delegate: "GPU"
+          },
+          runningMode: "VIDEO",
+          numHands: 2
+        });
+
+        document.getElementById('vision-status').innerText = 'Vision: Ready';
         startDetectionLoop();
       } catch(e) {
-        console.error("Failed to load detector", e);
-        document.getElementById('vision-status').innerText = 'Vision: Detector Offline';
+        console.error("Vision model initialization error", e);
+        document.getElementById('vision-status').innerText = 'Vision: Basic Mode';
       }
     }
 
     function startDetectionLoop() {
       setInterval(async () => {
-        if (!objectDetectorModel || !video.videoWidth) return;
+        if (!video.videoWidth) return;
         
         overlay.width = video.videoWidth;
         overlay.height = video.videoHeight;
-
-        const predictions = await objectDetectorModel.detect(video);
-        detectedObjectsList = predictions.map(p => `${p.class} (${Math.round(p.score * 100)}%)`);
-        
         overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
-        predictions.forEach(prediction => {
-          const [x, y, width, height] = prediction.bbox;
-          
-          overlayCtx.strokeStyle = "#00e5ff";
-          overlayCtx.lineWidth = 3;
-          overlayCtx.strokeRect(x, y, width, height);
 
-          overlayCtx.fillStyle = "rgba(0, 229, 255, 0.85)";
-          overlayCtx.font = "16px sans-serif";
-          const label = `${prediction.class} ${Math.round(prediction.score * 100)}%`;
-          const textWidth = overlayCtx.measureText(label).width;
+        if (objectDetectorModel) {
+          const predictions = await objectDetectorModel.detect(video);
+          detectedObjectsList = predictions.map(p => `${p.class} (${Math.round(p.score * 100)}%)`);
           
-          overlayCtx.fillRect(x, y > 24 ? y - 24 : y, textWidth + 10, 24);
-          overlayCtx.fillStyle = "#000000";
-          overlayCtx.fillText(label, x + 5, y > 24 ? y - 7 : y + 17);
-        });
+          predictions.forEach(p => {
+            const [x, y, w, h] = p.bbox;
+            overlayCtx.strokeStyle = "#00e5ff";
+            overlayCtx.lineWidth = 2;
+            overlayCtx.strokeRect(x, y, w, h);
+          });
+        }
+
+        if (gestureRecognizer && video.currentTime > 0) {
+          const gestureResults = gestureRecognizer.recognizeForVideo(video, Date.now());
+          detectedGesturesList = [];
+          
+          if (gestureResults.gestures.length > 0) {
+            gestureResults.gestures.forEach((gestures, idx) => {
+              const name = gestures[0].categoryName;
+              const score = Math.round(gestures[0].score * 100);
+              if (name !== 'Unrecognized') {
+                detectedGesturesList.push(`Hand ${idx + 1}: ${name} (${score}%)`);
+              }
+            });
+          }
+        }
       }, 150);
+    }
+
+    function updateFaceDisplay(openMouth = false) {
+      const poses = FACE_MAP[currentPose] || FACE_MAP.neutral;
+      faceImage.src = openMouth ? poses.open : poses.closed;
+    }
+
+    function startMouthFlap() {
+      stopMouthFlap();
+      let state = false;
+      mouthFlapInterval = setInterval(() => {
+        state = !state;
+        updateFaceDisplay(state);
+      }, 160);
+    }
+
+    function stopMouthFlap() {
+      if (mouthFlapInterval) clearInterval(mouthFlapInterval);
+      updateFaceDisplay(false);
+    }
+
+    function updateStatsUI() {
+      document.getElementById('karma-val').innerText = karmaScore;
+      let label = "Neutral";
+      if (emotionScore > 30) label = "Happy";
+      else if (emotionScore < -30) label = "Angry";
+      else if (currentPose === 'bored') label = "Bored";
+
+      document.getElementById('emotion-val').innerText = `${label} (${emotionScore})`;
     }
 
     function loadAllSaves() {
@@ -377,11 +602,11 @@
       recognition.interimResults = false;
 
       recognition.onstart = () => {
-        document.getElementById('mic-status').innerText = 'Mic: Active (Listening)';
+        if (!isMuted) document.getElementById('mic-status').innerText = 'Mic: Active';
       };
 
       recognition.onresult = async (event) => {
-        if (isSpeaking) return; // Prevent input processing while speaking
+        if (isSpeaking || isMuted) return;
 
         const text = event.results[event.results.length - 1][0].transcript.trim();
         if (!text) return;
@@ -395,23 +620,30 @@
       };
 
       recognition.onend = () => {
-        if (isListening && !isSpeaking) {
+        if (isListening && !isSpeaking && !isMuted) {
           try { recognition.start(); } catch(e){}
-        } else if (!isSpeaking) {
-          document.getElementById('mic-status').innerText = 'Mic: Off';
         }
       };
+    }
+
+    function startSpontaneousTalkingLoop() {
+      if (idleInterval) clearInterval(idleInterval);
+      
+      idleInterval = setInterval(() => {
+        if (isListening && !isSpeaking && !isMuted) {
+          processTurn("[IDLE PROMPT: Observe the environment, gestures, or human action]");
+        }
+      }, 20000);
     }
 
     function pauseListening() {
       if (recognition && isListening) {
         try { recognition.stop(); } catch(e){}
       }
-      document.getElementById('mic-status').innerText = 'Mic: Muted (Bot Speaking)';
     }
 
     function resumeListening() {
-      if (recognition && isListening) {
+      if (recognition && isListening && !isMuted) {
         try { recognition.start(); } catch(e){}
       }
     }
@@ -442,16 +674,19 @@
         return;
       }
 
-      document.getElementById('vision-status').innerText = 'Vision: Analyzing...';
       const base64Img = captureFrame();
       const sysPrompt = getSystemPrompt();
       const selectedModel = apiProvider.value;
-      const detectedContext = detectedObjectsList.length ? `Objects outlined in frame: [${detectedObjectsList.join(', ')}]` : '';
 
+      const visionContext = [];
+      if (detectedObjectsList.length) visionContext.push(`Detected Objects: [${detectedObjectsList.join(', ')}]`);
+      if (detectedGesturesList.length) visionContext.push(`Detected Gestures: [${detectedGesturesList.join(', ')}]`);
+      
+      const detectedContext = visionContext.join('\n');
       const currentSlotHistory = chatHistory[activeSlot] || [];
 
       try {
-        let replyText = "";
+        let rawResponse = "";
         
         if (selectedModel === 'openai') {
           const apiMessages = [{ role: "system", content: sysPrompt }];
@@ -481,13 +716,14 @@
             },
             body: JSON.stringify({
               model: "gpt-4o-mini",
-              messages: apiMessages
+              messages: apiMessages,
+              response_format: { type: "json_object" }
             })
           });
 
           const data = await res.json();
           if (data.error) throw new Error(data.error.message);
-          replyText = data.choices[0].message.content;
+          rawResponse = data.choices[0].message.content;
 
         } else {
           const contents = [];
@@ -501,7 +737,7 @@
             }
           });
 
-          const activeUserParts = [{ text: `${sysPrompt}\n${detectedContext}\nUser says: "${userText}"` }];
+          const activeUserParts = [{ text: `${sysPrompt}\n${detectedContext}\nUser input: "${userText}"` }];
           if (base64Img) activeUserParts.push({ inline_data: { mime_type: "image/jpeg", data: base64Img } });
 
           if (contents.length > 0 && contents[contents.length - 1].role === 'user') {
@@ -519,17 +755,30 @@
           
           const data = await res.json();
           if (data.error) throw new Error(data.error.message);
-          replyText = data.candidates[0].content.parts[0].text;
+          rawResponse = data.candidates[0].content.parts[0].text;
         }
 
-        logMessage('bot', replyText);
-        await speak(replyText);
+        let parsedPayload = {};
+        try {
+          parsedPayload = JSON.parse(rawResponse.replace(/```json|```/g, '').trim());
+        } catch(e) {
+          parsedPayload = { speech: rawResponse, pose: 'neutral', emotion_change: 0, karma_change: 0 };
+        }
+
+        emotionScore = Math.min(100, Math.max(-100, emotionScore + (parsedPayload.emotion_change || 0)));
+        karmaScore = Math.min(100, Math.max(-100, karmaScore + (parsedPayload.karma_change || 0)));
+        currentPose = parsedPayload.pose || 'neutral';
+        
+        updateStatsUI();
+        updateFaceDisplay(false);
+
+        const speechOutput = parsedPayload.speech || rawResponse;
+        logMessage('bot', speechOutput);
+        await speak(speechOutput);
 
       } catch (err) {
         console.error("API Error Detail:", err);
         logMessage('sys', `API Error: ${err.message}`);
-      } finally {
-        document.getElementById('vision-status').innerText = 'Vision: Ready (Detection Active)';
       }
     }
 
@@ -541,8 +790,10 @@
     async function speak(text) {
       isSpeaking = true;
       pauseListening();
+      startMouthFlap();
 
       const finishSpeaking = (resolveFunc) => {
+        stopMouthFlap();
         isSpeaking = false;
         resumeListening();
         resolveFunc();
@@ -593,24 +844,42 @@
       });
     }
 
+    function activateAI() {
+      isListening = true;
+      document.body.classList.add('ai-active');
+      
+      if (recognition && !isSpeaking && !isMuted) {
+        try { recognition.start(); } catch(e){}
+      }
+      
+      startSpontaneousTalkingLoop();
+      startBtn.innerText = "🛑 Deactivate Companion";
+      startBtn.style.background = "#ff5252";
+      startBtn.style.color = "#fff";
+    }
+
+    function deactivateAI() {
+      isListening = false;
+      document.body.classList.remove('ai-active');
+      chatLog.style.display = '';
+      
+      if (idleInterval) clearInterval(idleInterval);
+      
+      if (recognition) {
+        try { recognition.stop(); } catch(e){}
+      }
+
+      startBtn.innerText = "⚡ Activate AI Companion";
+      startBtn.style.background = "var(--accent)";
+      startBtn.style.color = "#000";
+      document.getElementById('mic-status').innerText = 'Mic: Off';
+    }
+
     startBtn.onclick = () => {
       if (!isListening) {
-        isListening = true;
-        if (recognition && !isSpeaking) {
-          try { recognition.start(); } catch(e){}
-        }
-        startBtn.innerText = "🛑 Stop AI";
-        startBtn.style.background = "#ff5252";
-        startBtn.style.color = "#fff";
+        activateAI();
       } else {
-        isListening = false;
-        if (recognition) {
-          try { recognition.stop(); } catch(e){}
-        }
-        startBtn.innerText = "⚡ Activate AI";
-        startBtn.style.background = "var(--accent)";
-        startBtn.style.color = "#000";
-        document.getElementById('mic-status').innerText = 'Mic: Off';
+        deactivateAI();
       }
     };
 
